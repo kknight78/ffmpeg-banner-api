@@ -27,21 +27,38 @@ const PLATFORM_COLORS = {
   INSTAGRAM: { bg: '0x1a325b', text: '0xfeb628' }
 };
 
-// Download video from URL
-async function downloadVideo(url, outputPath) {
-  const response = await axios({
-    method: 'GET',
-    url: url,
-    responseType: 'stream'
-  });
+// Download video from URL with retry for CDN propagation delays
+async function downloadVideo(url, outputPath, maxRetries = 5, initialDelay = 2000) {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const response = await axios({
+        method: 'GET',
+        url: url,
+        responseType: 'stream',
+        timeout: 60000
+      });
 
-  const writer = fs.createWriteStream(outputPath);
-  response.data.pipe(writer);
+      const writer = fs.createWriteStream(outputPath);
+      response.data.pipe(writer);
 
-  return new Promise((resolve, reject) => {
-    writer.on('finish', resolve);
-    writer.on('error', reject);
-  });
+      return new Promise((resolve, reject) => {
+        writer.on('finish', resolve);
+        writer.on('error', reject);
+      });
+    } catch (error) {
+      const status = error.response?.status;
+
+      // Retry on 404 (CDN not ready) or 5xx (server errors)
+      if ((status === 404 || status >= 500) && attempt < maxRetries) {
+        const delay = initialDelay * Math.pow(2, attempt - 1); // Exponential backoff
+        console.log(`  Download attempt ${attempt} failed (${status}), retrying in ${delay}ms...`);
+        await new Promise(r => setTimeout(r, delay));
+        continue;
+      }
+
+      throw error;
+    }
+  }
 }
 
 // Get video dimensions
