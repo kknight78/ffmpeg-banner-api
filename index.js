@@ -19,12 +19,13 @@ cloudinary.config({
 // Temp directory for processing
 const TEMP_DIR = '/tmp';
 
-// Platform colors (optional - currently all use same style)
-const PLATFORM_COLORS = {
-  YOUTUBE: { bg: '0x1a325b', text: '0xfeb628' },
-  TIKTOK: { bg: '0x1a325b', text: '0xfeb628' },
-  FACEBOOK: { bg: '0x1a325b', text: '0xfeb628' },
-  INSTAGRAM: { bg: '0x1a325b', text: '0xfeb628' }
+// Default banner settings (can be overridden per-request via banner_config)
+const DEFAULT_BANNER_CONFIG = {
+  y_percent: 0.159,           // Position: ~16% from top
+  font_size_percent: 0.04,    // Font: 4% of min dimension
+  show_background: false,     // No background box by default
+  text_color: '#feb628',      // Gold text
+  bg_color: '#1a325b'         // Navy background (if show_background: true)
 };
 
 // Download video from URL with retry for CDN propagation delays
@@ -78,40 +79,51 @@ function getVideoDimensions(videoPath) {
 
 // Add scrolling banner to video
 async function addScrollingBanner(inputPath, outputPath, options) {
-  const { avatarName, platform, duration } = options;
+  const { avatarName, platform, duration, bannerConfig = {} } = options;
   const text = `Ask for ${avatarName} and mention you saw this on ${platform}!`;
 
   // Get video dimensions
   const { width, height } = await getVideoDimensions(inputPath);
 
-  // Banner settings matching Creatomate
-  const colors = PLATFORM_COLORS[platform] || PLATFORM_COLORS.YOUTUBE;
-  const fontSize = Math.round(Math.min(width, height) * 0.04); // 4 vmin equivalent
-  const bannerY = Math.round(height * 0.159); // ~16% from top
+  // Merge banner config with defaults
+  const config = { ...DEFAULT_BANNER_CONFIG, ...bannerConfig };
+
+  // Calculate actual pixel values from percentages
+  const fontSize = Math.round(Math.min(width, height) * config.font_size_percent);
+  const bannerY = Math.round(height * config.y_percent);
+  const textColor = config.text_color.replace('0x', '#');
+  const bgColor = config.bg_color.replace('0x', '#');
+
+  console.log(`  Banner config: y=${bannerY}px (${(config.y_percent * 100).toFixed(1)}%), fontSize=${fontSize}px, showBg=${config.show_background}`);
 
   // Calculate scroll speed - text should scroll 3 times in video duration
-  // Speed = (text_width + video_width) * 3 / duration
-  // We estimate text width as roughly fontSize * text.length * 0.6
   const estimatedTextWidth = fontSize * text.length * 0.6;
   const totalScrollDistance = (estimatedTextWidth + width) * 3;
   const scrollSpeed = totalScrollDistance / duration;
+
+  // Build drawtext options
+  const drawtextOptions = {
+    text: text,
+    fontfile: '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
+    fontsize: fontSize,
+    fontcolor: textColor,
+    x: `w-mod(t*${scrollSpeed}\\,w+tw+100)`,
+    y: bannerY
+  };
+
+  // Only add background box if show_background is true
+  if (config.show_background) {
+    drawtextOptions.box = 1;
+    drawtextOptions.boxcolor = bgColor;
+    drawtextOptions.boxborderw = Math.round(fontSize * 0.3);
+  }
 
   return new Promise((resolve, reject) => {
     ffmpeg(inputPath)
       .videoFilters([
         {
           filter: 'drawtext',
-          options: {
-            text: text,
-            fontfile: '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
-            fontsize: fontSize,
-            fontcolor: colors.text.replace('0x', '#'),
-            box: 1,
-            boxcolor: colors.bg.replace('0x', '#'),
-            boxborderw: Math.round(fontSize * 0.3),
-            x: `w-mod(t*${scrollSpeed}\\,w+tw+100)`,
-            y: bannerY
-          }
+          options: drawtextOptions
         }
       ])
       .outputOptions([
@@ -143,7 +155,7 @@ app.get('/health', (req, res) => {
 
 // Main endpoint: Add banner to video
 app.post('/add-banner', async (req, res) => {
-  const { video_url, avatar_name, platform, duration } = req.body;
+  const { video_url, avatar_name, platform, duration, banner_config } = req.body;
 
   if (!video_url || !avatar_name || !platform) {
     return res.status(400).json({
@@ -157,6 +169,9 @@ app.post('/add-banner', async (req, res) => {
 
   try {
     console.log(`[${jobId}] Starting banner job for ${platform}`);
+    if (banner_config) {
+      console.log(`[${jobId}] Custom banner_config:`, JSON.stringify(banner_config));
+    }
 
     // Download video
     console.log(`[${jobId}] Downloading video...`);
@@ -169,12 +184,13 @@ app.post('/add-banner', async (req, res) => {
       videoDuration = info.duration;
     }
 
-    // Add banner
+    // Add banner with optional custom config
     console.log(`[${jobId}] Adding scrolling banner...`);
     await addScrollingBanner(inputPath, outputPath, {
       avatarName: avatar_name,
       platform: platform.toUpperCase(),
-      duration: videoDuration
+      duration: videoDuration,
+      bannerConfig: banner_config
     });
 
     // Upload to Cloudinary
@@ -210,7 +226,7 @@ app.post('/add-banner', async (req, res) => {
 
 // Batch endpoint: Add banners for multiple platforms
 app.post('/add-banners-batch', async (req, res) => {
-  const { video_url, avatar_name, platforms, duration } = req.body;
+  const { video_url, avatar_name, platforms, duration, banner_config } = req.body;
 
   if (!video_url || !avatar_name || !platforms || !Array.isArray(platforms)) {
     return res.status(400).json({
@@ -224,6 +240,9 @@ app.post('/add-banners-batch', async (req, res) => {
 
   try {
     console.log(`[${jobId}] Starting batch job for ${platforms.length} platforms`);
+    if (banner_config) {
+      console.log(`[${jobId}] Custom banner_config:`, JSON.stringify(banner_config));
+    }
 
     // Download video once
     console.log(`[${jobId}] Downloading video...`);
@@ -241,7 +260,8 @@ app.post('/add-banners-batch', async (req, res) => {
       await addScrollingBanner(inputPath, outputPath, {
         avatarName: avatar_name,
         platform: platform.toUpperCase(),
-        duration: videoDuration
+        duration: videoDuration,
+        bannerConfig: banner_config
       });
 
       const outputUrl = await uploadToCloudinary(outputPath);
