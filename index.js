@@ -77,6 +77,15 @@ function getVideoDimensions(videoPath) {
   });
 }
 
+// Infer template height from video aspect ratio (standard Creatomate dimensions)
+function inferTemplateHeight(width, height) {
+  const aspectRatio = width / height;
+  if (aspectRatio < 0.7) return 1280;      // 9:16 (portrait) → 720x1280
+  if (aspectRatio < 0.9) return 1350;      // 4:5 → 1080x1350
+  if (aspectRatio < 1.1) return 1080;      // 1:1 (square) → 1080x1080
+  return 720;                               // 16:9 (landscape) → 1280x720
+}
+
 // Add scrolling banner to video
 async function addScrollingBanner(inputPath, outputPath, options) {
   const { avatarName, platform, duration, bannerConfig = {} } = options;
@@ -88,17 +97,43 @@ async function addScrollingBanner(inputPath, outputPath, options) {
   // Merge banner config with defaults
   const config = { ...DEFAULT_BANNER_CONFIG, ...bannerConfig };
 
-  // Calculate actual pixel values from percentages
-  const fontSize = Math.round(Math.min(width, height) * config.font_size_percent);
-  const bannerY = Math.round(height * config.y_percent);
-  const textColor = config.text_color.replace('0x', '#');
+  // Calculate font size - prefer font_size_percent, fall back to converting pixel value
+  let fontSize;
+  if (config.font_size_percent !== undefined) {
+    fontSize = Math.round(Math.min(width, height) * config.font_size_percent);
+  } else if (config.font_size !== undefined) {
+    // Convert pixel font_size to percentage based on template dimensions
+    const templateHeight = config.template_height || inferTemplateHeight(width, height);
+    const fontSizePercent = config.font_size / Math.min(templateHeight, templateHeight * (width / height));
+    fontSize = Math.round(Math.min(width, height) * fontSizePercent);
+  } else {
+    fontSize = Math.round(Math.min(width, height) * DEFAULT_BANNER_CONFIG.font_size_percent);
+  }
+
+  // Calculate Y position - prefer y_percent, fall back to converting pixel value
+  let yPercent;
+  if (config.y_percent !== undefined) {
+    yPercent = config.y_percent;
+  } else if (config.y !== undefined) {
+    // Convert pixel y to percentage based on template height
+    const templateHeight = config.template_height || inferTemplateHeight(width, height);
+    yPercent = config.y / templateHeight;
+  } else {
+    yPercent = DEFAULT_BANNER_CONFIG.y_percent;
+  }
+
+  // Creatomate y positions the top of the text bounding box (includes line-height padding)
+  // ffmpeg positions the top of actual text glyphs, so add ~30% of fontSize to compensate
+  const bannerY = Math.round(height * yPercent + fontSize * 0.3);
+  const textColor = (config.text_color || config.fill_color || DEFAULT_BANNER_CONFIG.text_color).replace('0x', '#');
   const bgColor = config.bg_color.replace('0x', '#');
 
-  console.log(`  Banner config: y=${bannerY}px (${(config.y_percent * 100).toFixed(1)}%), fontSize=${fontSize}px, showBg=${config.show_background}`);
+  console.log(`  Banner config received:`, JSON.stringify(bannerConfig));
+  console.log(`  Banner positioning: y=${bannerY}px (${(yPercent * 100).toFixed(1)}% of ${height}px), fontSize=${fontSize}px, showBg=${config.show_background}`);
 
-  // Calculate scroll speed - text should scroll 3 times in video duration
+  // Calculate scroll speed - text should scroll 2 times in video duration
   const estimatedTextWidth = fontSize * text.length * 0.6;
-  const totalScrollDistance = (estimatedTextWidth + width) * 3;
+  const totalScrollDistance = (estimatedTextWidth + width) * 2;
   const scrollSpeed = totalScrollDistance / duration;
 
   // Build drawtext options
