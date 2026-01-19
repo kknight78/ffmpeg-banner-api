@@ -123,24 +123,32 @@ async function addScrollingBanner(inputPath, outputPath, options) {
   // Get video dimensions
   const { width, height } = await getVideoDimensions(inputPath);
 
-  // Merge banner config with defaults
+  // Merge banner config with defaults (but don't let defaults override incoming values)
   const config = { ...DEFAULT_BANNER_CONFIG, ...bannerConfig };
-  const templateHeight = config.template_height || inferTemplateHeight(width, height);
+  const templateHeight = bannerConfig.template_height || inferTemplateHeight(width, height);
   const videoMin = Math.min(width, height);
 
-  // Calculate font size - parse Creatomate format ("4 vmin", "32", etc.)
-  let fontSizePercent = config.font_size_percent;
-  if (fontSizePercent === undefined) {
-    const parsed = parseCreatomateValue(config.font_size, videoMin, templateHeight);
-    fontSizePercent = parsed !== null ? parsed : DEFAULT_BANNER_CONFIG.font_size_percent;
+  // Calculate font size - check bannerConfig first (not merged config)
+  let fontSizePercent;
+  if (bannerConfig.font_size_percent !== undefined) {
+    fontSizePercent = bannerConfig.font_size_percent;
+  } else if (bannerConfig.font_size !== undefined) {
+    fontSizePercent = parseCreatomateValue(bannerConfig.font_size, videoMin, templateHeight);
+  }
+  if (fontSizePercent === undefined || fontSizePercent === null) {
+    fontSizePercent = DEFAULT_BANNER_CONFIG.font_size_percent;
   }
   const fontSize = Math.round(videoMin * fontSizePercent);
 
-  // Calculate Y position - parse Creatomate format ("15.9%", "204", etc.)
-  let yPercent = config.y_percent;
-  if (yPercent === undefined) {
-    const parsed = parseCreatomateValue(config.y, videoMin, templateHeight);
-    yPercent = parsed !== null ? parsed : DEFAULT_BANNER_CONFIG.y_percent;
+  // Calculate Y position - check bannerConfig first (not merged config)
+  let yPercent;
+  if (bannerConfig.y_percent !== undefined) {
+    yPercent = bannerConfig.y_percent;
+  } else if (bannerConfig.y !== undefined) {
+    yPercent = parseCreatomateValue(bannerConfig.y, videoMin, templateHeight);
+  }
+  if (yPercent === undefined || yPercent === null) {
+    yPercent = DEFAULT_BANNER_CONFIG.y_percent;
   }
 
   // Creatomate y positions the top of the text bounding box (includes line-height padding)
