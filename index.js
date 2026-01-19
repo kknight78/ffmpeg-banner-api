@@ -86,6 +86,35 @@ function inferTemplateHeight(width, height) {
   return 720;                               // 16:9 (landscape) → 1280x720
 }
 
+// Parse Creatomate dimension values - handles "15.9%", "4 vmin", or raw numbers
+function parseCreatomateValue(value, videoMin, templateHeight) {
+  if (value === undefined || value === null) return null;
+
+  // Already a number
+  if (typeof value === 'number') return value;
+
+  const str = String(value).trim();
+
+  // Percentage string like "15.9395%" → convert to decimal (0.159395)
+  if (str.endsWith('%')) {
+    return parseFloat(str) / 100;
+  }
+
+  // vmin string like "4 vmin" → percentage of min dimension
+  if (str.includes('vmin')) {
+    const vminValue = parseFloat(str);
+    return vminValue / 100;  // "4 vmin" → 0.04
+  }
+
+  // Plain number as string, assume pixels → convert to percentage
+  const numValue = parseFloat(str);
+  if (!isNaN(numValue)) {
+    return numValue / templateHeight;
+  }
+
+  return null;
+}
+
 // Add scrolling banner to video
 async function addScrollingBanner(inputPath, outputPath, options) {
   const { avatarName, platform, duration, bannerConfig = {} } = options;
@@ -96,30 +125,22 @@ async function addScrollingBanner(inputPath, outputPath, options) {
 
   // Merge banner config with defaults
   const config = { ...DEFAULT_BANNER_CONFIG, ...bannerConfig };
+  const templateHeight = config.template_height || inferTemplateHeight(width, height);
+  const videoMin = Math.min(width, height);
 
-  // Calculate font size - prefer font_size_percent, fall back to converting pixel value
-  let fontSize;
-  if (config.font_size_percent !== undefined) {
-    fontSize = Math.round(Math.min(width, height) * config.font_size_percent);
-  } else if (config.font_size !== undefined) {
-    // Convert pixel font_size to percentage based on template dimensions
-    const templateHeight = config.template_height || inferTemplateHeight(width, height);
-    const fontSizePercent = config.font_size / Math.min(templateHeight, templateHeight * (width / height));
-    fontSize = Math.round(Math.min(width, height) * fontSizePercent);
-  } else {
-    fontSize = Math.round(Math.min(width, height) * DEFAULT_BANNER_CONFIG.font_size_percent);
+  // Calculate font size - parse Creatomate format ("4 vmin", "32", etc.)
+  let fontSizePercent = config.font_size_percent;
+  if (fontSizePercent === undefined) {
+    const parsed = parseCreatomateValue(config.font_size, videoMin, templateHeight);
+    fontSizePercent = parsed !== null ? parsed : DEFAULT_BANNER_CONFIG.font_size_percent;
   }
+  const fontSize = Math.round(videoMin * fontSizePercent);
 
-  // Calculate Y position - prefer y_percent, fall back to converting pixel value
-  let yPercent;
-  if (config.y_percent !== undefined) {
-    yPercent = config.y_percent;
-  } else if (config.y !== undefined) {
-    // Convert pixel y to percentage based on template height
-    const templateHeight = config.template_height || inferTemplateHeight(width, height);
-    yPercent = config.y / templateHeight;
-  } else {
-    yPercent = DEFAULT_BANNER_CONFIG.y_percent;
+  // Calculate Y position - parse Creatomate format ("15.9%", "204", etc.)
+  let yPercent = config.y_percent;
+  if (yPercent === undefined) {
+    const parsed = parseCreatomateValue(config.y, videoMin, templateHeight);
+    yPercent = parsed !== null ? parsed : DEFAULT_BANNER_CONFIG.y_percent;
   }
 
   // Creatomate y positions the top of the text bounding box (includes line-height padding)
