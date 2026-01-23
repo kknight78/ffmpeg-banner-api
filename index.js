@@ -361,6 +361,75 @@ app.post('/add-banners-batch', async (req, res) => {
   }
 });
 
+// Add silence to end of audio (for avatar rest pose)
+app.post('/add-silence', async (req, res) => {
+  const { audio_url, silence_seconds = 1.5 } = req.body;
+
+  if (!audio_url) {
+    return res.status(400).json({
+      error: 'Missing required field: audio_url'
+    });
+  }
+
+  const jobId = uuidv4();
+  const inputPath = path.join(TEMP_DIR, `audio-in-${jobId}.mp3`);
+  const outputPath = path.join(TEMP_DIR, `audio-out-${jobId}.mp3`);
+
+  try {
+    console.log(`[${jobId}] Adding ${silence_seconds}s silence to audio`);
+
+    // Download audio
+    console.log(`[${jobId}] Downloading audio...`);
+    await downloadVideo(audio_url, inputPath);
+
+    // Add silence using ffmpeg
+    console.log(`[${jobId}] Appending silence...`);
+    await new Promise((resolve, reject) => {
+      ffmpeg()
+        .input(inputPath)
+        .input('anullsrc=r=44100:cl=mono')
+        .inputFormat('lavfi')
+        .inputOptions([`-t ${silence_seconds}`])
+        .complexFilter(['[0:a][1:a]concat=n=2:v=0:a=1[out]'])
+        .outputOptions(['-map', '[out]'])
+        .on('end', resolve)
+        .on('error', reject)
+        .save(outputPath);
+    });
+
+    // Upload to Cloudinary
+    console.log(`[${jobId}] Uploading to Cloudinary...`);
+    const result = await cloudinary.uploader.upload(outputPath, {
+      resource_type: 'video',  // Cloudinary uses 'video' for audio too
+      folder: 'ad-pilot-audio',
+      overwrite: true
+    });
+
+    // Cleanup
+    fs.unlinkSync(inputPath);
+    fs.unlinkSync(outputPath);
+
+    console.log(`[${jobId}] Complete! ${result.secure_url}`);
+
+    res.json({
+      success: true,
+      audio_url: result.secure_url,
+      silence_added: silence_seconds
+    });
+
+  } catch (error) {
+    console.error(`[${jobId}] Error:`, error);
+
+    if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
+    if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
+
+    res.status(500).json({
+      error: 'Failed to process audio',
+      details: error.message
+    });
+  }
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`ffmpeg-banner-api running on port ${PORT}`);
