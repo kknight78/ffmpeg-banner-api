@@ -363,7 +363,7 @@ app.post('/add-banners-batch', async (req, res) => {
 
 // Add silence to end of audio (for avatar rest pose)
 app.post('/add-silence', async (req, res) => {
-  const { audio_url, silence_seconds = 1.5 } = req.body;
+  const { audio_url, silence_seconds = 1 } = req.body;
 
   if (!audio_url) {
     return res.status(400).json({
